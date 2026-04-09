@@ -1,0 +1,307 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Matrix Cost Visualizer</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sora: ["Sora", "sans-serif"],
+              mono: ["IBM Plex Mono", "monospace"],
+            },
+            colors: {
+              mist: "#f8fafc",
+              ink: "#0f172a",
+              accent: "#0284c7",
+              accentSoft: "#e0f2fe",
+            },
+          },
+        },
+      };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  </head>
+  <body class="font-sora min-h-screen bg-mist text-ink">
+    <div class="pointer-events-none fixed inset-0 overflow-hidden" aria-hidden="true">
+      <div class="absolute -left-28 top-10 h-72 w-72 rounded-full bg-sky-200/40 blur-3xl"></div>
+      <div class="absolute -right-24 bottom-8 h-72 w-72 rounded-full bg-cyan-200/50 blur-3xl"></div>
+    </div>
+
+    <main class="relative flex min-h-screen items-center justify-center px-4 py-8 md:px-6">
+      <article
+        class="w-full max-w-6xl space-y-8 rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-[0_20px_70px_-45px_rgba(2,132,199,0.55)] backdrop-blur md:p-8"
+      >
+        <header class="space-y-3 text-center">
+          <p class="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">PCAM Learning Sandbox</p>
+          <h1 class="text-3xl font-semibold tracking-tight md:text-4xl">Matrix Cost Visualizer</h1>
+          <p class="mx-auto max-w-3xl text-sm text-slate-600 md:text-base">
+            Explore GEMM, GEMV, and Gram matrix workloads with user-defined matrix shapes and data shares. Computation, communication, and memory estimates update live in browser.
+          </p>
+        </header>
+
+        <section id="input-controls" class="space-y-4">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="text-xl font-semibold">Input Controls</h2>
+            <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">Live updates</span>
+          </div>
+
+          <div class="grid gap-4 lg:grid-cols-2">
+            <div class="rounded-2xl border border-slate-200 bg-white p-4">
+              <label for="operation-select" class="mb-1 block text-sm font-medium text-slate-700">Operation Preset</label>
+              <select
+                id="operation-select"
+                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+              >
+                <option value="gemm">GEMM: C = A x B</option>
+                <option value="gemv">GEMV: y = A x v</option>
+                <option value="gram">Gram: C = A^T x A</option>
+              </select>
+              <p id="operation-help" class="mt-2 text-xs text-slate-500">Standard dense matrix multiply for rectangular matrices.</p>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-white p-4">
+              <div class="flex items-center justify-between">
+                <label for="p-slider" class="text-sm font-medium text-slate-700">Processors <span class="font-mono text-slate-500">p</span></label>
+                <span class="text-xs text-slate-500">1 to 1024</span>
+              </div>
+              <div class="mt-2 flex items-center gap-3">
+                <input id="p-slider" type="range" min="1" max="1024" step="1" value="64" class="w-full accent-sky-600" />
+                <input
+                  id="p-input"
+                  type="number"
+                  min="1"
+                  max="1024"
+                  step="1"
+                  value="64"
+                  class="w-28 rounded-lg border border-slate-300 px-2 py-1.5 text-right font-mono text-sm focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="grid gap-4 lg:grid-cols-2">
+            <div class="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+              <div class="flex items-center justify-between gap-3">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500">Matrix A and B Shapes</h3>
+                <span class="text-xs text-slate-500">Auto-compatible by preset</span>
+              </div>
+
+              <div class="grid gap-2 sm:grid-cols-2">
+                <label class="text-xs text-slate-600">
+                  A rows
+                  <input id="a-rows" type="number" min="1" max="32768" step="1" value="1024" class="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-sm focus:border-sky-500 focus:outline-none" />
+                </label>
+                <label class="text-xs text-slate-600">
+                  A cols
+                  <input id="a-cols" type="number" min="1" max="32768" step="1" value="1024" class="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-sm focus:border-sky-500 focus:outline-none" />
+                </label>
+                <label class="text-xs text-slate-600">
+                  B rows
+                  <input id="b-rows" type="number" min="1" max="32768" step="1" value="1024" class="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-sm focus:border-sky-500 focus:outline-none" />
+                </label>
+                <label class="text-xs text-slate-600">
+                  B cols
+                  <input id="b-cols" type="number" min="1" max="32768" step="1" value="1024" class="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-sm focus:border-sky-500 focus:outline-none" />
+                </label>
+              </div>
+
+              <p id="shape-validity" class="text-xs text-slate-500">Shapes are currently valid for multiplication.</p>
+            </div>
+
+            <div class="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500">Matrix Share Per Processor</h3>
+                <span class="text-xs text-slate-500">A/B locality</span>
+              </div>
+
+              <label class="block text-xs text-slate-600">
+                Share of A already local (%)
+                <div class="mt-1 flex items-center gap-3">
+                  <input id="share-a-slider" type="range" min="0" max="100" step="1" value="20" class="w-full accent-sky-600" />
+                  <input id="share-a-input" type="number" min="0" max="100" step="1" value="20" class="w-20 rounded-lg border border-slate-300 px-2 py-1.5 text-right font-mono text-sm focus:border-sky-500 focus:outline-none" />
+                </div>
+              </label>
+
+              <label class="block text-xs text-slate-600">
+                Share of B already local (%)
+                <div class="mt-1 flex items-center gap-3">
+                  <input id="share-b-slider" type="range" min="0" max="100" step="1" value="20" class="w-full accent-sky-600" />
+                  <input id="share-b-input" type="number" min="0" max="100" step="1" value="20" class="w-20 rounded-lg border border-slate-300 px-2 py-1.5 text-right font-mono text-sm focus:border-sky-500 focus:outline-none" />
+                </div>
+              </label>
+
+              <div class="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                <span class="text-xs font-medium text-slate-700">Cost Model</span>
+                <div class="inline-flex rounded-xl border border-slate-200 bg-white p-1">
+                  <button id="naive-btn" data-algorithm="naive" class="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition">Naive</button>
+                  <button id="tiled-btn" data-algorithm="tiled" class="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition">Tiled</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="output-metrics" class="space-y-4">
+          <h2 class="text-xl font-semibold">Output Metrics</h2>
+
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div class="rounded-xl border border-slate-200 bg-white p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Derived Equation</p>
+              <p id="equation" class="mt-2 font-mono text-sm font-medium text-slate-900">-</p>
+              <p class="mt-1 text-xs text-slate-500">Auto-formed from selected operation.</p>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Output Matrix C</p>
+              <p id="c-shape" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+              <p class="mt-1 text-xs text-slate-500">Rows x cols</p>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total FLOPs</p>
+              <p id="flops" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+              <p class="mt-1 text-xs text-slate-500" title="FLOPs estimate for the full operation before partitioning.">Whole workload</p>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-accentSoft p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-sky-700">Selected Model</p>
+              <p id="selected-summary" class="mt-2 text-sm font-semibold text-sky-800">-</p>
+              <p id="tile-size" class="mt-1 text-xs text-sky-700">-</p>
+            </div>
+          </div>
+
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div class="rounded-xl border border-slate-200 bg-white p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Naive Compute / Proc</p>
+              <p id="naive-compute" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Naive Communication</p>
+              <p id="naive-comm" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+              <p id="naive-comm-words" class="mt-1 text-xs text-slate-500">-</p>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Naive Memory / Proc</p>
+              <p id="naive-memory" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tiled Compute / Proc</p>
+              <p id="tiled-compute" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tiled Communication</p>
+              <p id="tiled-comm" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+              <p id="tiled-comm-words" class="mt-1 text-xs text-slate-500">-</p>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tiled Memory / Proc</p>
+              <p id="tiled-memory" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+            <p class="font-medium">Formula Notes</p>
+            <p class="mt-1 text-xs text-slate-600" title="Communication words are estimated from missing data share and collective pattern differences between naive and tiled distribution.">
+              Communication words are modeled as a function of missing local data from A/B shares, plus output movement.
+            </p>
+            <p class="mt-1 text-xs text-slate-600" title="Memory estimate is per processor: local data + output shard + temporary staging for incoming tiles/panels.">
+              Memory is estimated per processor, including local share, output shard, and temporary staging buffers.
+            </p>
+          </div>
+        </section>
+
+        <section id="visualization-chart" class="space-y-4">
+          <div class="flex flex-wrap items-end justify-between gap-2">
+            <h2 class="text-xl font-semibold">Visualization Charts</h2>
+            <p id="chart-label" class="text-sm text-slate-600">Separate axes for compute, communication, memory, and roofline behavior.</p>
+          </div>
+
+          <div class="grid gap-4 xl:grid-cols-2">
+            <div class="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Compute vs p</p>
+              <div class="h-64 md:h-72">
+                <canvas id="compute-chart" aria-label="Compute cost chart" role="img"></canvas>
+              </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Communication vs p</p>
+              <div class="h-64 md:h-72">
+                <canvas id="comm-chart" aria-label="Communication cost chart" role="img"></canvas>
+              </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Memory / Processor vs p</p>
+              <div class="h-64 md:h-72">
+                <canvas id="memory-chart" aria-label="Memory chart" role="img"></canvas>
+              </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Roofline Curve</p>
+              <div class="h-64 md:h-72">
+                <canvas id="roofline-chart" aria-label="Roofline chart" role="img"></canvas>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="profiling-panel" class="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="text-lg font-semibold">Profiling</h2>
+            <p class="text-xs text-slate-500">Browser-side update timing</p>
+          </div>
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+              <p class="text-xs uppercase tracking-wide text-slate-500">Calc Time</p>
+              <p id="profile-calc-ms" class="mt-1 font-mono text-sm font-semibold text-slate-800">-</p>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+              <p class="text-xs uppercase tracking-wide text-slate-500">Chart Draw Time</p>
+              <p id="profile-chart-ms" class="mt-1 font-mono text-sm font-semibold text-slate-800">-</p>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+              <p class="text-xs uppercase tracking-wide text-slate-500">Total Update</p>
+              <p id="profile-total-ms" class="mt-1 font-mono text-sm font-semibold text-slate-800">-</p>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+              <p class="text-xs uppercase tracking-wide text-slate-500">Series Points</p>
+              <p id="profile-points" class="mt-1 font-mono text-sm font-semibold text-slate-800">-</p>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+              <p class="text-xs uppercase tracking-wide text-slate-500">Updates</p>
+              <p id="profile-updates" class="mt-1 font-mono text-sm font-semibold text-slate-800">-</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <h2 class="text-lg font-semibold">PCAM Lens (Quinn Michel Style Learning Prompt)</h2>
+          <p class="mt-2 text-sm text-slate-700">
+            Decomposition changes FLOPs distribution, communication reflects movement of non-local blocks, and agglomeration/mapping are approximated through matrix share and processor count. Try lowering A/B share to see communication dominate.
+          </p>
+        </section>
+      </article>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
