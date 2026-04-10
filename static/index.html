@@ -88,6 +88,49 @@
                   class="w-28 rounded-lg border border-slate-300 px-2 py-1.5 text-right font-mono text-sm focus:border-sky-500 focus:outline-none"
                 />
               </div>
+
+              <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                <label class="text-xs text-slate-600">
+                  Program Profile
+                  <select
+                    id="program-select"
+                    class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-sky-500 focus:outline-none"
+                  >
+                    <option value="numpy">NumPy</option>
+                    <option value="cuda">CUDA Kernel</option>
+                    <option value="cublas">cuBLAS</option>
+                  </select>
+                </label>
+
+                <label class="text-xs text-slate-600">
+                  GPU Hardware
+                  <select
+                    id="hardware-select"
+                    class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-sky-500 focus:outline-none"
+                  >
+                    <option value="h100">NVIDIA Hopper H100 (approx)</option>
+                    <option value="blackwell_b200">NVIDIA Blackwell B200 (approx)</option>
+                    <option value="a100">NVIDIA A100 (approx)</option>
+                    <option value="rtx4090">NVIDIA RTX 4090 (approx)</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="mt-2 grid gap-2 sm:grid-cols-3">
+                <label class="text-xs text-slate-600">
+                  Peak GFLOP/s
+                  <input id="peak-gflops-input" type="number" min="1" step="1" value="60000" class="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-sm focus:border-sky-500 focus:outline-none" />
+                </label>
+                <label class="text-xs text-slate-600">
+                  Bandwidth (GB/s)
+                  <input id="bandwidth-gbps-input" type="number" min="1" step="1" value="3350" class="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-sm focus:border-sky-500 focus:outline-none" />
+                </label>
+                <label class="text-xs text-slate-600">
+                  Latency (us)
+                  <input id="latency-us-input" type="number" min="0.01" step="0.01" value="1.5" class="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-sm focus:border-sky-500 focus:outline-none" />
+                </label>
+              </div>
             </div>
           </div>
 
@@ -184,82 +227,73 @@
 
           <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <div class="rounded-xl border border-slate-200 bg-white p-3">
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Naive Compute / Proc</p>
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Naive Throughput</p>
               <p id="naive-compute" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+              <p class="mt-1 text-xs text-slate-500">GFLOP/s</p>
             </div>
 
             <div class="rounded-xl border border-slate-200 bg-white p-3">
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Naive Communication</p>
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Naive Memory Movement</p>
               <p id="naive-comm" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
               <p id="naive-comm-words" class="mt-1 text-xs text-slate-500">-</p>
             </div>
 
             <div class="rounded-xl border border-slate-200 bg-white p-3">
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Naive Memory / Proc</p>
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Naive Memory Cost (Time)</p>
               <p id="naive-memory" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
             </div>
 
             <div class="rounded-xl border border-slate-200 bg-white p-3">
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tiled Compute / Proc</p>
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tiled Throughput</p>
               <p id="tiled-compute" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
+              <p class="mt-1 text-xs text-slate-500">GFLOP/s</p>
             </div>
 
             <div class="rounded-xl border border-slate-200 bg-white p-3">
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tiled Communication</p>
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tiled Memory Movement</p>
               <p id="tiled-comm" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
               <p id="tiled-comm-words" class="mt-1 text-xs text-slate-500">-</p>
             </div>
 
             <div class="rounded-xl border border-slate-200 bg-white p-3">
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tiled Memory / Proc</p>
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Tiled Memory Cost (Time)</p>
               <p id="tiled-memory" class="mt-2 font-mono text-lg font-medium text-slate-900">-</p>
             </div>
           </div>
 
           <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
             <p class="font-medium">Formula Notes</p>
-            <p class="mt-1 text-xs text-slate-600" title="Communication words are estimated from missing data share and collective pattern differences between naive and tiled distribution.">
-              Communication words are modeled as a function of missing local data from A/B shares, plus output movement.
+            <p class="mt-1 text-xs text-slate-600" title="Baseline derivation uses GEMM: A(l x m) * B(m x n) -> C(l x n).">
+              Baseline system model is GEMM: A(l x m) x B(m x n) -> C(l x n).
             </p>
-            <p class="mt-1 text-xs text-slate-600" title="Memory estimate is per processor: local data + output shard + temporary staging for incoming tiles/panels.">
-              Memory is estimated per processor, including local share, output shard, and temporary staging buffers.
+            <p class="mt-1 text-xs text-slate-600" title="Compute cost = 2lmn FLOPs (pure arithmetic work).">
+              Compute cost = 2lmn FLOPs.
+            </p>
+            <p class="mt-1 text-xs text-slate-600" title="Memory movement = lm + mn + ln elements; bytes = (lm + mn + ln) * element size.">
+              Memory movement = lm + mn + ln.
+            </p>
+            <p class="mt-1 text-xs text-slate-600" title="Memory cost (time) ~= memory movement / bandwidth + latency terms.">
+              Memory cost = memory movement / bandwidth + latency.
+            </p>
+            <p class="mt-1 text-xs text-slate-600" title="Arithmetic intensity = compute / memory movement.">
+              Arithmetic intensity (AI) = compute / memory movement.
+            </p>
+            <p class="mt-1 text-xs text-slate-600" title="For l=m=n, AI = (2n^3)/(3n^2) = 2n/3, so larger n shifts toward compute-bound behavior.">
+              For square matrices, AI = 2n/3. As n grows, workloads become more compute-bound; tiling and system scaling change effective movement, bandwidth use, and observed balance.
             </p>
           </div>
         </section>
 
         <section id="visualization-chart" class="space-y-4">
           <div class="flex flex-wrap items-end justify-between gap-2">
-            <h2 class="text-xl font-semibold">Visualization Charts</h2>
-            <p id="chart-label" class="text-sm text-slate-600">Separate axes for compute, communication, memory, and roofline behavior.</p>
+            <h2 class="text-xl font-semibold">Roofline Time Model</h2>
+            <p id="chart-label" class="text-sm text-slate-600">Execution time vs arithmetic intensity using T_compute, T_memory, and T(AI).</p>
           </div>
 
-          <div class="grid gap-4 xl:grid-cols-2">
-            <div class="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
-              <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Compute vs p</p>
-              <div class="h-64 md:h-72">
-                <canvas id="compute-chart" aria-label="Compute cost chart" role="img"></canvas>
-              </div>
-            </div>
-
-            <div class="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
-              <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Communication vs p</p>
-              <div class="h-64 md:h-72">
-                <canvas id="comm-chart" aria-label="Communication cost chart" role="img"></canvas>
-              </div>
-            </div>
-
-            <div class="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
-              <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Memory / Processor vs p</p>
-              <div class="h-64 md:h-72">
-                <canvas id="memory-chart" aria-label="Memory chart" role="img"></canvas>
-              </div>
-            </div>
-
-            <div class="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
-              <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Roofline Curve</p>
-              <div class="h-64 md:h-72">
-                <canvas id="roofline-chart" aria-label="Roofline chart" role="img"></canvas>
-              </div>
+          <div class="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
+            <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">T(AI) = max(T_compute, T_memory) with knee at AI = Ppeak / BW</p>
+            <div class="h-80 md:h-96">
+              <canvas id="roofline-chart" aria-label="Roofline time chart" role="img"></canvas>
             </div>
           </div>
         </section>
@@ -296,7 +330,7 @@
         <section class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <h2 class="text-lg font-semibold">PCAM Lens (Quinn Michel Style Learning Prompt)</h2>
           <p class="mt-2 text-sm text-slate-700">
-            Decomposition changes FLOPs distribution, communication reflects movement of non-local blocks, and agglomeration/mapping are approximated through matrix share and processor count. Try lowering A/B share to see communication dominate.
+            Start from GEMM baseline equations, then observe how decomposition/tiling alter effective memory movement and communication phases. Increase matrix scale to see AI rise (square case AI = 2n/3), then compare where memory-bound behavior transitions to compute-bound behavior.
           </p>
         </section>
 

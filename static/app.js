@@ -1,6 +1,67 @@
 ﻿const ELEMENT_BYTES = 8;
-const PEAK_FLOPS_PER_PROC = 120e9;
-const BANDWIDTH_BYTES_PER_PROC = 25e9;
+
+const HARDWARE_PROFILES = {
+  h100: {
+    label: "NVIDIA Hopper H100",
+    peakGflops: 60000,
+    bandwidthGBps: 3350,
+    latencyUs: 1.5,
+  },
+  blackwell_b200: {
+    label: "NVIDIA Blackwell B200",
+    peakGflops: 90000,
+    bandwidthGBps: 8000,
+    latencyUs: 1.2,
+  },
+  a100: {
+    label: "NVIDIA A100",
+    peakGflops: 19500,
+    bandwidthGBps: 1555,
+    latencyUs: 1.8,
+  },
+  rtx4090: {
+    label: "NVIDIA RTX 4090",
+    peakGflops: 82500,
+    bandwidthGBps: 1008,
+    latencyUs: 2.2,
+  },
+  custom: {
+    label: "Custom",
+    peakGflops: 60000,
+    bandwidthGBps: 3350,
+    latencyUs: 1.5,
+  },
+};
+
+const PROGRAM_PROFILES = {
+  numpy: {
+    label: "NumPy",
+    computeUtilNaive: 0.08,
+    computeUtilTiled: 0.15,
+    bandwidthUtilNaive: 0.2,
+    bandwidthUtilTiled: 0.28,
+    latencyScaleNaive: 2.8,
+    latencyScaleTiled: 2.2,
+  },
+  cuda: {
+    label: "CUDA Kernel",
+    computeUtilNaive: 0.35,
+    computeUtilTiled: 0.55,
+    bandwidthUtilNaive: 0.5,
+    bandwidthUtilTiled: 0.65,
+    latencyScaleNaive: 1.5,
+    latencyScaleTiled: 1.2,
+  },
+  cublas: {
+    label: "cuBLAS",
+    computeUtilNaive: 0.45,
+    computeUtilTiled: 0.88,
+    bandwidthUtilNaive: 0.58,
+    bandwidthUtilTiled: 0.82,
+    latencyScaleNaive: 1,
+    latencyScaleTiled: 0.85,
+  },
+};
 
 const OPERATIONS = {
   gemm: {
@@ -44,6 +105,11 @@ const OPERATIONS = {
 const state = {
   operation: "gemm",
   algorithm: "tiled",
+  program: "cublas",
+  hardware: "h100",
+  peakGflops: HARDWARE_PROFILES.h100.peakGflops,
+  bandwidthGBps: HARDWARE_PROFILES.h100.bandwidthGBps,
+  latencyUs: HARDWARE_PROFILES.h100.latencyUs,
   p: 64,
   aRows: 1024,
   aCols: 1024,
@@ -61,6 +127,11 @@ const dom = {
   operationHelp: document.getElementById("operation-help"),
   pSlider: document.getElementById("p-slider"),
   pInput: document.getElementById("p-input"),
+  programSelect: document.getElementById("program-select"),
+  hardwareSelect: document.getElementById("hardware-select"),
+  peakGflopsInput: document.getElementById("peak-gflops-input"),
+  bandwidthGbpsInput: document.getElementById("bandwidth-gbps-input"),
+  latencyUsInput: document.getElementById("latency-us-input"),
   aRows: document.getElementById("a-rows"),
   aCols: document.getElementById("a-cols"),
   bRows: document.getElementById("b-rows"),
@@ -85,9 +156,6 @@ const dom = {
   tiledCommWords: document.getElementById("tiled-comm-words"),
   tiledMemory: document.getElementById("tiled-memory"),
   chartLabel: document.getElementById("chart-label"),
-  computeCanvas: document.getElementById("compute-chart"),
-  commCanvas: document.getElementById("comm-chart"),
-  memoryCanvas: document.getElementById("memory-chart"),
   rooflineCanvas: document.getElementById("roofline-chart"),
   profileCalcMs: document.getElementById("profile-calc-ms"),
   profileChartMs: document.getElementById("profile-chart-ms"),
@@ -97,9 +165,6 @@ const dom = {
 };
 
 const charts = {
-  compute: null,
-  comm: null,
-  memory: null,
   roofline: null,
 };
 
@@ -116,6 +181,11 @@ function clamp(value, min, max) {
 
 function toSafeInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toSafeFloat(value, fallback) {
+  const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -138,6 +208,10 @@ function formatScientific(value) {
   }).format(value);
 }
 
+function formatGflops(value) {
+  return `${formatScientific(value)} GFLOP/s`;
+}
+
 function formatBytes(bytes) {
   const units = ["B", "KB", "MB", "GB", "TB", "PB"];
   let value = bytes;
@@ -155,53 +229,74 @@ function formatMs(ms) {
   return `${ms.toFixed(2)} ms`;
 }
 
-function getSelectedModelMetrics(costs) {
-  if (state.algorithm === "naive") {
+function formatSeconds(seconds) {
+  if (seconds <= 0) {
+    return "0 s";
+  }
+
+  if (seconds < 1e-6) {
+    return `${(seconds * 1e9).toFixed(2)} ns`;
+  }
+
+  if (seconds < 1e-3) {
+    return `${(seconds * 1e6).toFixed(2)} us`;
+  }
+
+  if (seconds < 1) {
+    return `${(seconds * 1e3).toFixed(2)} ms`;
+  }
+
+  return `${seconds.toFixed(3)} s`;
+}
+
+function getProgramFactors(algorithm) {
+  const program = PROGRAM_PROFILES[state.program] || PROGRAM_PROFILES.cublas;
+  if (algorithm === "naive") {
     return {
-      compute: costs.computeNaive,
-      commWords: costs.commNaiveWords,
-      commBytes: costs.commNaiveBytes,
-      memoryBytes: costs.memoryNaiveBytes,
+      computeUtil: program.computeUtilNaive,
+      bandwidthUtil: program.bandwidthUtilNaive,
+      latencyScale: program.latencyScaleNaive,
     };
   }
 
   return {
-    compute: costs.computeTiled,
-    commWords: costs.commTiledWords,
-    commBytes: costs.commTiledBytes,
-    memoryBytes: costs.memoryTiledBytes,
+    computeUtil: program.computeUtilTiled,
+    bandwidthUtil: program.bandwidthUtilTiled,
+    latencyScale: program.latencyScaleTiled,
   };
 }
 
-function getRooflineLimits(processors) {
+function getPerformanceCaps(processors, algorithm) {
   const p = Math.max(1, processors);
+  const factors = getProgramFactors(algorithm);
+
   return {
-    peakFlopsPerSec: PEAK_FLOPS_PER_PROC * p,
-    bandwidthBytesPerSec: BANDWIDTH_BYTES_PER_PROC * p,
+    peakFlopsPerSec: Math.max(1, state.peakGflops) * 1e9 * p * Math.max(0.01, factors.computeUtil),
+    bandwidthBytesPerSec: Math.max(1, state.bandwidthGBps) * 1e9 * p * Math.max(0.01, factors.bandwidthUtil),
+    latencySeconds: Math.max(0.01, state.latencyUs) * 1e-6 * Math.max(0.01, factors.latencyScale),
   };
 }
 
-function getRooflineStats(costs, processors) {
-  const selected = getSelectedModelMetrics(costs);
-  const limits = getRooflineLimits(processors);
+function syncHardwareInputsDisabledState() {
+  const isCustom = state.hardware === "custom";
+  [dom.peakGflopsInput, dom.bandwidthGbpsInput, dom.latencyUsInput].forEach((input) => {
+    input.disabled = !isCustom;
+    input.classList.toggle("bg-slate-100", !isCustom);
+  });
+}
 
-  const commBytes = Math.max(selected.commBytes, 1e-9);
-  const intensity = clamp(costs.flops / commBytes, 1e-6, 1e12);
+function applyHardwareProfile(force = false) {
+  const profile = HARDWARE_PROFILES[state.hardware] || HARDWARE_PROFILES.h100;
+  if (state.hardware !== "custom" || force) {
+    state.peakGflops = profile.peakGflops;
+    state.bandwidthGBps = profile.bandwidthGBps;
+    state.latencyUs = profile.latencyUs;
+  }
 
-  const rooflineLimit = Math.min(limits.peakFlopsPerSec, limits.bandwidthBytesPerSec * intensity);
-
-  const computeSeconds = costs.flops / limits.peakFlopsPerSec;
-  const commSeconds = selected.commBytes / limits.bandwidthBytesPerSec;
-  const totalSeconds = Math.max(1e-12, computeSeconds + commSeconds);
-  const achievedPerformance = costs.flops / totalSeconds;
-
-  return {
-    intensity,
-    rooflineLimit,
-    achievedPerformance,
-    peakFlopsPerSec: limits.peakFlopsPerSec,
-    bandwidthBytesPerSec: limits.bandwidthBytesPerSec,
-  };
+  dom.peakGflopsInput.value = String(state.peakGflops);
+  dom.bandwidthGbpsInput.value = String(state.bandwidthGBps);
+  dom.latencyUsInput.value = String(state.latencyUs);
+  syncHardwareInputsDisabledState();
 }
 
 function applyDimensionConstraints(changedKey = "aCols") {
@@ -232,9 +327,34 @@ function applyDimensionConstraints(changedKey = "aCols") {
   dom.bCols.classList.toggle("bg-slate-100", lockB);
 }
 
+function getBaselineGemmTerms(forcedDims) {
+  if (state.operation === "gram") {
+    return {
+      l: forcedDims.aCols,
+      m: forcedDims.aRows,
+      n: forcedDims.aCols,
+    };
+  }
+
+  if (state.operation === "gemv") {
+    return {
+      l: forcedDims.aRows,
+      m: forcedDims.aCols,
+      n: 1,
+    };
+  }
+
+  return {
+    l: forcedDims.aRows,
+    m: forcedDims.aCols,
+    n: forcedDims.bCols,
+  };
+}
+
 function getOperationStateForP(processors) {
   const p = Math.max(1, processors);
   const op = OPERATIONS[state.operation];
+
   const dims = {
     aRows: state.aRows,
     aCols: state.aCols,
@@ -245,47 +365,189 @@ function getOperationStateForP(processors) {
   };
 
   const forced = op.forceDimensions({ ...dims }, "aCols");
-  const flops = op.flops(forced);
-  const aElements = forced.aRows * forced.aCols;
-  const bElements = forced.bRows * forced.bCols;
-  const cElements = forced.cRows * forced.cCols;
+  const { l, m, n } = getBaselineGemmTerms(forced);
+
+  const baselineFlops = 2 * l * m * n;
+  const baselineAElements = l * m;
+  const baselineBElements = m * n;
+  const baselineCElements = l * n;
+  const baselineMovementElements =
+    baselineAElements + baselineBElements + baselineCElements;
+  const baselineMovementBytes = baselineMovementElements * ELEMENT_BYTES;
+  const baselineAI = baselineFlops / Math.max(1, baselineMovementBytes);
 
   const shareA = state.shareA / 100;
   const shareB = state.shareB / 100;
 
-  const missingA = aElements * (1 - shareA);
-  const missingB = bElements * (1 - shareB);
+  const shareAdjustedMovementElements =
+    baselineAElements * (1 - shareA) +
+    baselineBElements * (1 - shareB) +
+    baselineCElements;
 
-  const computeNaive = flops / p + cElements;
-  const computeTiled = flops / p;
+  const commNaiveWords =
+    p === 1 ? 0 : (shareAdjustedMovementElements * (p - 1)) / p;
+  const commTiledWords =
+    p === 1 ? 0 : shareAdjustedMovementElements / Math.sqrt(p);
 
-  const baseWords = missingA + missingB + cElements;
-  const commNaiveWords = p === 1 ? 0 : (baseWords * (p - 1)) / p;
-  const commTiledWords = p === 1 ? 0 : baseWords / Math.sqrt(p);
+  const commNaiveBytes = commNaiveWords * ELEMENT_BYTES;
+  const commTiledBytes = commTiledWords * ELEMENT_BYTES;
 
-  const localA = aElements * shareA;
-  const localB = bElements * shareB;
-  const outputShard = cElements / p;
+  const naiveMovementElements = shareAdjustedMovementElements + commNaiveWords;
+  const tiledMovementElements = shareAdjustedMovementElements + commTiledWords;
 
-  const memoryNaiveElements = localA + localB + outputShard + missingA + missingB;
-  const memoryTiledElements = localA + localB + outputShard + (missingA + missingB) / Math.sqrt(p);
+  const naiveMovementBytes = naiveMovementElements * ELEMENT_BYTES;
+  const tiledMovementBytes = tiledMovementElements * ELEMENT_BYTES;
+
+  const naiveAI = baselineFlops / Math.max(1, naiveMovementBytes);
+  const tiledAI = baselineFlops / Math.max(1, tiledMovementBytes);
+
+  const naiveMessages = p === 1 ? 0 : p - 1;
+  const tiledMessages = p === 1 ? 0 : Math.max(1, Math.ceil(Math.sqrt(p)) - 1);
+
+  const naiveCaps = getPerformanceCaps(p, "naive");
+  const tiledCaps = getPerformanceCaps(p, "tiled");
+
+  const naiveWorkFlops = baselineFlops;
+  const tiledWorkFlops = baselineFlops;
+
+  const computeCostNaiveSec = naiveWorkFlops / naiveCaps.peakFlopsPerSec;
+  const computeCostTiledSec = tiledWorkFlops / tiledCaps.peakFlopsPerSec;
+
+  const memoryCostNaiveSec =
+    naiveMovementBytes / naiveCaps.bandwidthBytesPerSec +
+    naiveCaps.latencySeconds * naiveMessages;
+  const memoryCostTiledSec =
+    tiledMovementBytes / tiledCaps.bandwidthBytesPerSec +
+    tiledCaps.latencySeconds * tiledMessages;
+
+  const totalNaiveTimeSec = Math.max(1e-12, computeCostNaiveSec + memoryCostNaiveSec);
+  const totalTiledTimeSec = Math.max(1e-12, computeCostTiledSec + memoryCostTiledSec);
+
+  const naiveThroughputGflops = baselineFlops / totalNaiveTimeSec / 1e9;
+  const tiledThroughputGflops = baselineFlops / totalTiledTimeSec / 1e9;
 
   const cTileRows = forced.cRows / Math.sqrt(p);
   const cTileCols = forced.cCols / Math.sqrt(p);
 
   return {
     dims: forced,
-    flops,
-    computeNaive,
-    computeTiled,
+    flops: baselineFlops,
+    l,
+    m,
+    n,
+    baselineAElements,
+    baselineBElements,
+    baselineCElements,
+    baselineMovementElements,
+    baselineMovementBytes,
+    baselineAI,
+    shareAdjustedMovementElements,
     commNaiveWords,
     commTiledWords,
-    commNaiveBytes: commNaiveWords * ELEMENT_BYTES,
-    commTiledBytes: commTiledWords * ELEMENT_BYTES,
-    memoryNaiveBytes: memoryNaiveElements * ELEMENT_BYTES,
-    memoryTiledBytes: memoryTiledElements * ELEMENT_BYTES,
+    commNaiveBytes,
+    commTiledBytes,
+    naiveMovementElements,
+    tiledMovementElements,
+    naiveMovementBytes,
+    tiledMovementBytes,
+    naiveAI,
+    tiledAI,
+    memoryCostNaiveSec,
+    memoryCostTiledSec,
+    totalNaiveTimeSec,
+    totalTiledTimeSec,
+    naiveThroughputGflops,
+    tiledThroughputGflops,
+    naivePeakGflops: naiveCaps.peakFlopsPerSec / 1e9,
+    tiledPeakGflops: tiledCaps.peakFlopsPerSec / 1e9,
+    naiveBandwidthGBps: naiveCaps.bandwidthBytesPerSec / 1e9,
+    tiledBandwidthGBps: tiledCaps.bandwidthBytesPerSec / 1e9,
     cTileRows,
     cTileCols,
+  };
+}
+
+function getSelectedModelMetrics(costs) {
+  if (state.algorithm === "naive") {
+    return {
+      throughputGflops: costs.naiveThroughputGflops,
+      commWords: costs.commNaiveWords,
+      commBytes: costs.naiveMovementBytes,
+      commOverheadBytes: costs.commNaiveBytes,
+      memoryMovementElements: costs.naiveMovementElements,
+      memoryMovementBytes: costs.naiveMovementBytes,
+      arithmeticIntensity: costs.naiveAI,
+      memoryCostSec: costs.memoryCostNaiveSec,
+      totalTimeSec: costs.totalNaiveTimeSec,
+      peakGflops: costs.naivePeakGflops,
+      effectiveBandwidthGBps: costs.naiveBandwidthGBps,
+    };
+  }
+
+  return {
+    throughputGflops: costs.tiledThroughputGflops,
+    commWords: costs.commTiledWords,
+    commBytes: costs.tiledMovementBytes,
+    commOverheadBytes: costs.commTiledBytes,
+    memoryMovementElements: costs.tiledMovementElements,
+    memoryMovementBytes: costs.tiledMovementBytes,
+    arithmeticIntensity: costs.tiledAI,
+    memoryCostSec: costs.memoryCostTiledSec,
+    totalTimeSec: costs.totalTiledTimeSec,
+    peakGflops: costs.tiledPeakGflops,
+    effectiveBandwidthGBps: costs.tiledBandwidthGBps,
+  };
+}
+
+function getRooflineTimeModel(costs) {
+  const caps = getPerformanceCaps(state.p, state.algorithm);
+  const selected = getSelectedModelMetrics(costs);
+
+  const flops = Math.max(1, costs.flops);
+  const pPeak = Math.max(1, caps.peakFlopsPerSec);
+  const bw = Math.max(1, caps.bandwidthBytesPerSec);
+
+  const tCompute = flops / pPeak;
+  const aiKnee = pPeak / bw;
+
+  const minAI = Math.max(1e-6, aiKnee / 100);
+  const maxAI = Math.max(minAI * 10, aiKnee * 100);
+
+  const tComputeCurve = [];
+  const tMemoryCurve = [];
+  const tBoundCurve = [];
+  const steps = 180;
+
+  for (let i = 0; i <= steps; i += 1) {
+    const ratio = i / steps;
+    const ai = minAI * Math.pow(maxAI / minAI, ratio);
+    const tMemory = flops / (ai * bw);
+    const tBound = Math.max(tCompute, tMemory);
+
+    tComputeCurve.push({ x: ai, y: tCompute });
+    tMemoryCurve.push({ x: ai, y: tMemory });
+    tBoundCurve.push({ x: ai, y: tBound });
+  }
+
+  const currentAI = clamp(
+    flops / Math.max(selected.memoryMovementBytes, 1e-9),
+    minAI,
+    maxAI,
+  );
+  const currentTMemory = flops / (currentAI * bw);
+  const currentTBound = Math.max(tCompute, currentTMemory);
+
+  return {
+    aiKnee,
+    tCompute,
+    tComputeCurve,
+    tMemoryCurve,
+    tBoundCurve,
+    minAI,
+    maxAI,
+    currentAI,
+    currentTBound,
+    pointCount: tComputeCurve.length + tMemoryCurve.length + tBoundCurve.length,
   };
 }
 
@@ -367,6 +629,58 @@ function bindOperationSelect() {
   });
 }
 
+function bindProgramSelect() {
+  dom.programSelect.addEventListener("change", (event) => {
+    const next = event.target.value;
+    if (!PROGRAM_PROFILES[next]) {
+      return;
+    }
+
+    state.program = next;
+    scheduleUpdate();
+  });
+}
+
+function bindHardwareControls() {
+  dom.hardwareSelect.addEventListener("change", (event) => {
+    const next = event.target.value;
+    if (!HARDWARE_PROFILES[next]) {
+      return;
+    }
+
+    state.hardware = next;
+    applyHardwareProfile();
+    scheduleUpdate();
+  });
+
+  dom.peakGflopsInput.addEventListener("input", (event) => {
+    if (state.hardware !== "custom") {
+      return;
+    }
+    state.peakGflops = clamp(toSafeFloat(event.target.value, state.peakGflops), 1, 1e7);
+    event.target.value = String(state.peakGflops);
+    scheduleUpdate();
+  });
+
+  dom.bandwidthGbpsInput.addEventListener("input", (event) => {
+    if (state.hardware !== "custom") {
+      return;
+    }
+    state.bandwidthGBps = clamp(toSafeFloat(event.target.value, state.bandwidthGBps), 1, 1e6);
+    event.target.value = String(state.bandwidthGBps);
+    scheduleUpdate();
+  });
+
+  dom.latencyUsInput.addEventListener("input", (event) => {
+    if (state.hardware !== "custom") {
+      return;
+    }
+    state.latencyUs = clamp(toSafeFloat(event.target.value, state.latencyUs), 0.01, 1e4);
+    event.target.value = String(state.latencyUs);
+    scheduleUpdate();
+  });
+}
+
 function bindAlgorithmToggle() {
   dom.toggleButtons.forEach((button) => {
     button.addEventListener("click", () => {
@@ -381,81 +695,37 @@ function bindAlgorithmToggle() {
   });
 }
 
-function buildSeries(maxP) {
-  const computeData = [];
-  const communicationData = [];
-  const memoryData = [];
-  const rooflinePathData = [];
-  const maxPoints = 220;
-  const step = Math.max(1, Math.ceil(maxP / maxPoints));
-
-  for (let p = 1; p <= maxP; p += step) {
-    const costs = getOperationStateForP(p);
-    const selected = getSelectedModelMetrics(costs);
-    const roofline = getRooflineStats(costs, p);
-
-    computeData.push({ x: p, y: selected.compute });
-    communicationData.push({ x: p, y: selected.commBytes });
-    memoryData.push({ x: p, y: selected.memoryBytes });
-    rooflinePathData.push({ x: roofline.intensity, y: roofline.achievedPerformance });
-  }
-
-  const lastPoint = computeData[computeData.length - 1];
-  if (!lastPoint || lastPoint.x !== maxP) {
-    const costs = getOperationStateForP(maxP);
-    const selected = getSelectedModelMetrics(costs);
-    const roofline = getRooflineStats(costs, maxP);
-
-    computeData.push({ x: maxP, y: selected.compute });
-    communicationData.push({ x: maxP, y: selected.commBytes });
-    memoryData.push({ x: maxP, y: selected.memoryBytes });
-    rooflinePathData.push({ x: roofline.intensity, y: roofline.achievedPerformance });
-  }
-
-  return {
-    computeData,
-    communicationData,
-    memoryData,
-    rooflinePathData,
-    pointCount:
-      computeData.length +
-      communicationData.length +
-      memoryData.length +
-      rooflinePathData.length,
-  };
-}
-
-function buildRooflineCurve(processors) {
-  const limits = getRooflineLimits(processors);
-  const points = [];
-  const steps = 140;
-  const minIntensity = 1e-3;
-  const maxIntensity = 1e4;
-
-  for (let i = 0; i <= steps; i += 1) {
-    const ratio = i / steps;
-    const intensity = minIntensity * Math.pow(maxIntensity / minIntensity, ratio);
-    const limit = Math.min(limits.peakFlopsPerSec, limits.bandwidthBytesPerSec * intensity);
-    points.push({ x: intensity, y: limit });
-  }
-
-  return points;
-}
-
-function createSingleSeriesChart(canvas, label, color, yTitle, formatY) {
-  return new Chart(canvas.getContext("2d"), {
+function initChart() {
+  charts.roofline = new Chart(dom.rooflineCanvas.getContext("2d"), {
     type: "line",
     data: {
       datasets: [
         {
-          label,
+          label: "T_compute = FLOPs / P_peak",
           data: [],
-          borderColor: color,
-          backgroundColor: "rgba(0, 0, 0, 0.05)",
+          borderColor: "#2563eb",
+          backgroundColor: "rgba(37, 99, 235, 0.08)",
           pointRadius: 0,
-          pointHoverRadius: 4,
-          borderWidth: 2.4,
-          tension: 0.24,
+          borderWidth: 2.2,
+          tension: 0,
+        },
+        {
+          label: "T_memory = FLOPs / (AI * BW)",
+          data: [],
+          borderColor: "#0f766e",
+          backgroundColor: "rgba(15, 118, 110, 0.08)",
+          pointRadius: 0,
+          borderWidth: 2.2,
+          tension: 0,
+        },
+        {
+          label: "T(AI) = max(T_compute, T_memory)",
+          data: [],
+          borderColor: "#dc2626",
+          backgroundColor: "rgba(220, 38, 38, 0.12)",
+          pointRadius: 0,
+          borderWidth: 2.8,
+          tension: 0,
         },
       ],
     },
@@ -474,132 +744,12 @@ function createSingleSeriesChart(canvas, label, color, yTitle, formatY) {
       },
       plugins: {
         legend: {
-          display: false,
-        },
-        tooltip: {
-          callbacks: {
-            label(context) {
-              return `${context.dataset.label}: ${formatY(context.parsed.y)}`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: {
-          type: "linear",
-          min: 1,
-          max: state.p,
-          title: {
-            display: true,
-            text: "Processors (p)",
-          },
-          ticks: {
-            maxTicksLimit: 7,
-          },
-          grid: {
-            color: "rgba(148, 163, 184, 0.18)",
-          },
-        },
-        y: {
-          beginAtZero: true,
-          title: {
-            display: true,
-            text: yTitle,
-          },
-          ticks: {
-            callback(value) {
-              return compactFormatter.format(Number(value));
-            },
-          },
-          grid: {
-            color: "rgba(148, 163, 184, 0.18)",
-          },
-        },
-      },
-    },
-  });
-}
-
-function initCharts() {
-  charts.compute = createSingleSeriesChart(
-    dom.computeCanvas,
-    "Compute / Processor",
-    "#0284c7",
-    "Compute (ops estimate)",
-    formatScientific,
-  );
-
-  charts.comm = createSingleSeriesChart(
-    dom.commCanvas,
-    "Communication",
-    "#0f766e",
-    "Communication (bytes)",
-    formatBytes,
-  );
-
-  charts.memory = createSingleSeriesChart(
-    dom.memoryCanvas,
-    "Memory / Processor",
-    "#b45309",
-    "Memory (bytes)",
-    formatBytes,
-  );
-
-  charts.roofline = new Chart(dom.rooflineCanvas.getContext("2d"), {
-    type: "line",
-    data: {
-      datasets: [
-        {
-          label: "Roofline Limit",
-          data: [],
-          borderColor: "#334155",
-          backgroundColor: "rgba(51, 65, 85, 0.08)",
-          pointRadius: 0,
-          borderWidth: 2.4,
-          tension: 0,
-        },
-        {
-          label: "Achieved Path vs p",
-          data: [],
-          borderColor: "#f97316",
-          backgroundColor: "rgba(249, 115, 22, 0.15)",
-          pointRadius: 2.5,
-          pointHoverRadius: 4.5,
-          borderWidth: 2,
-          showLine: true,
-          tension: 0.2,
-        },
-        {
-          label: "Current Workload Point",
-          data: [],
-          borderColor: "#dc2626",
-          backgroundColor: "#dc2626",
-          pointRadius: 5,
-          pointHoverRadius: 6,
-          showLine: false,
-        },
-      ],
-    },
-    options: {
-      parsing: false,
-      normalized: true,
-      maintainAspectRatio: false,
-      responsive: true,
-      animation: {
-        duration: 380,
-        easing: "easeOutQuart",
-      },
-      plugins: {
-        legend: {
           position: "bottom",
         },
         tooltip: {
           callbacks: {
             label(context) {
-              if (context.dataset.label.includes("Point") || context.dataset.label.includes("Path")) {
-                return `${context.dataset.label}: ${formatScientific(context.parsed.y)} FLOP/s at I=${context.parsed.x.toFixed(3)}`;
-              }
-              return `${context.dataset.label}: ${formatScientific(context.parsed.y)} FLOP/s`;
+              return `${context.dataset.label}: ${formatSeconds(context.parsed.y)}`;
             },
           },
         },
@@ -608,10 +758,10 @@ function initCharts() {
         x: {
           type: "logarithmic",
           min: 1e-3,
-          max: 1e4,
+          max: 1e3,
           title: {
             display: true,
-            text: "Operational Intensity (FLOPs / byte)",
+            text: "Arithmetic Intensity (FLOPs / byte)",
           },
           grid: {
             color: "rgba(148, 163, 184, 0.18)",
@@ -621,11 +771,11 @@ function initCharts() {
           beginAtZero: true,
           title: {
             display: true,
-            text: "Performance (FLOP/s)",
+            text: "Execution Time (seconds)",
           },
           ticks: {
             callback(value) {
-              return compactFormatter.format(Number(value));
+              return formatSeconds(Number(value));
             },
           },
           grid: {
@@ -637,61 +787,42 @@ function initCharts() {
   });
 }
 
-function renderMetrics(costs) {
+function renderMetrics(costs, rooflineTimeModel) {
   const op = OPERATIONS[state.operation];
   const selected = getSelectedModelMetrics(costs);
-  const roofline = getRooflineStats(costs, state.p);
+  const hardware = HARDWARE_PROFILES[state.hardware] || HARDWARE_PROFILES.custom;
+  const program = PROGRAM_PROFILES[state.program] || PROGRAM_PROFILES.cublas;
 
   dom.operationHelp.textContent = op.help;
   dom.equation.textContent = op.equation(costs.dims);
   dom.cShape.textContent = `${costs.dims.cRows} x ${costs.dims.cCols}`;
   dom.flops.textContent = formatScientific(costs.flops);
 
-  dom.naiveCompute.textContent = formatScientific(costs.computeNaive);
-  dom.naiveComm.textContent = formatBytes(costs.commNaiveBytes);
-  dom.naiveCommWords.textContent = `${formatScientific(costs.commNaiveWords)} words`;
-  dom.naiveMemory.textContent = formatBytes(costs.memoryNaiveBytes);
+  dom.naiveCompute.textContent = formatScientific(costs.naiveThroughputGflops);
+  dom.naiveComm.textContent = formatBytes(costs.naiveMovementBytes);
+  dom.naiveCommWords.textContent = `${formatScientific(costs.naiveMovementElements)} elements (${formatScientific(costs.commNaiveWords)} overhead)`;
+  dom.naiveMemory.textContent = formatSeconds(costs.memoryCostNaiveSec);
 
-  dom.tiledCompute.textContent = formatScientific(costs.computeTiled);
-  dom.tiledComm.textContent = formatBytes(costs.commTiledBytes);
-  dom.tiledCommWords.textContent = `${formatScientific(costs.commTiledWords)} words`;
-  dom.tiledMemory.textContent = formatBytes(costs.memoryTiledBytes);
+  dom.tiledCompute.textContent = formatScientific(costs.tiledThroughputGflops);
+  dom.tiledComm.textContent = formatBytes(costs.tiledMovementBytes);
+  dom.tiledCommWords.textContent = `${formatScientific(costs.tiledMovementElements)} elements (${formatScientific(costs.commTiledWords)} overhead)`;
+  dom.tiledMemory.textContent = formatSeconds(costs.memoryCostTiledSec);
 
-  dom.selectedSummary.textContent = `${op.label} + ${state.algorithm === "naive" ? "Naive" : "Tiled"} at p=${state.p}`;
-  dom.tileSize.textContent = `C tile approx: ${costs.cTileRows.toFixed(2)} x ${costs.cTileCols.toFixed(2)} | I=${roofline.intensity.toFixed(3)} FLOPs/byte | Roof ${formatScientific(roofline.rooflineLimit)} FLOP/s`;
+  dom.selectedSummary.textContent = `${op.label} | ${state.algorithm === "naive" ? "Naive" : "Tiled"} | ${program.label}`;
+  dom.tileSize.textContent = `GPU: ${hardware.label} | C tile approx: ${costs.cTileRows.toFixed(2)} x ${costs.cTileCols.toFixed(2)} | Baseline AI=${costs.baselineAI.toFixed(3)} FLOPs/byte | Selected AI=${selected.arithmeticIntensity.toFixed(3)} | AI_knee=${rooflineTimeModel.aiKnee.toFixed(3)} | T_compute=${formatSeconds(rooflineTimeModel.tCompute)} | T_selected=${formatSeconds(selected.totalTimeSec)}`;
 
-  dom.chartLabel.textContent = `Showing ${op.label} with ${state.algorithm} model as separate compute, communication, memory, and roofline views.`;
-  dom.shapeValidity.textContent = `A(${state.aRows} x ${state.aCols}), B(${state.bRows} x ${state.bCols}), C(${costs.dims.cRows} x ${costs.dims.cCols})`;
+  dom.chartLabel.textContent = `Baseline GEMM is computed first: FLOPs=2lmn and movement=lm+mn+ln, then expanded with share, tiling, and hardware/software factors. Roofline uses T_compute=FLOPs/P_peak and T_memory=FLOPs/(AI*BW).`;
+  dom.shapeValidity.textContent = `A(${state.aRows} x ${state.aCols}), B(${state.bRows} x ${state.bCols}), C(${costs.dims.cRows} x ${costs.dims.cCols}) | Baseline terms: l=${costs.l}, m=${costs.m}, n=${costs.n} | 2lmn=${formatScientific(costs.flops)} | lm+mn+ln=${formatScientific(costs.baselineMovementElements)} elements | Effective peak ${formatScientific(selected.peakGflops)} GFLOP/s | Effective BW ${formatScientific(selected.effectiveBandwidthGBps)} GB/s`;
 }
 
-function renderCharts(series, costs) {
-  const rooflineNow = getRooflineStats(costs, state.p);
-  const rooflineCurve = buildRooflineCurve(state.p);
+function renderChart(rooflineTimeModel) {
+  charts.roofline.options.scales.x.min = rooflineTimeModel.minAI;
+  charts.roofline.options.scales.x.max = rooflineTimeModel.maxAI;
 
-  charts.compute.options.scales.x.max = Math.max(2, state.p);
-  charts.compute.data.datasets[0].label = `${state.algorithm === "naive" ? "Naive" : "Tiled"} Compute / Processor`;
-  charts.compute.data.datasets[0].data = series.computeData;
+  charts.roofline.data.datasets[0].data = rooflineTimeModel.tComputeCurve;
+  charts.roofline.data.datasets[1].data = rooflineTimeModel.tMemoryCurve;
+  charts.roofline.data.datasets[2].data = rooflineTimeModel.tBoundCurve;
 
-  charts.comm.options.scales.x.max = Math.max(2, state.p);
-  charts.comm.data.datasets[0].label = `${state.algorithm === "naive" ? "Naive" : "Tiled"} Communication`;
-  charts.comm.data.datasets[0].data = series.communicationData;
-
-  charts.memory.options.scales.x.max = Math.max(2, state.p);
-  charts.memory.data.datasets[0].label = `${state.algorithm === "naive" ? "Naive" : "Tiled"} Memory / Processor`;
-  charts.memory.data.datasets[0].data = series.memoryData;
-
-  charts.roofline.data.datasets[0].data = rooflineCurve;
-  charts.roofline.data.datasets[1].data = series.rooflinePathData;
-  charts.roofline.data.datasets[2].data = [
-    {
-      x: rooflineNow.intensity,
-      y: Math.min(rooflineNow.achievedPerformance, rooflineNow.peakFlopsPerSec),
-    },
-  ];
-
-  charts.compute.update();
-  charts.comm.update();
-  charts.memory.update();
   charts.roofline.update();
 }
 
@@ -712,16 +843,16 @@ function render() {
 
   const calcStart = performance.now();
   const costs = getOperationStateForP(state.p);
-  const series = buildSeries(state.p);
-  renderMetrics(costs);
+  const rooflineTimeModel = getRooflineTimeModel(costs);
+  renderMetrics(costs, rooflineTimeModel);
   const calcMs = performance.now() - calcStart;
 
   const chartStart = performance.now();
-  renderCharts(series, costs);
+  renderChart(rooflineTimeModel);
   const chartMs = performance.now() - chartStart;
 
   const totalMs = performance.now() - totalStart;
-  renderProfiling(calcMs, chartMs, totalMs, series.pointCount);
+  renderProfiling(calcMs, chartMs, totalMs, rooflineTimeModel.pointCount);
 }
 
 function scheduleUpdate() {
@@ -765,12 +896,18 @@ function init() {
 
   bindDimensionInputs();
   bindOperationSelect();
+  bindProgramSelect();
+  bindHardwareControls();
   bindAlgorithmToggle();
 
   dom.operationSelect.value = state.operation;
+  dom.programSelect.value = state.program;
+  dom.hardwareSelect.value = state.hardware;
+
+  applyHardwareProfile(true);
   applyDimensionConstraints("aCols");
 
-  initCharts();
+  initChart();
   render();
 }
 
